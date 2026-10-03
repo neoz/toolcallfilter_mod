@@ -67,6 +67,20 @@ test('refuses tool calls while the config is invalid', async ($, on) => {
   expect(ran).toBe(false)
 })
 
+test('keeps arguments masked when the engine forwards them to a model', async ($, on) => {
+  setupWorld(on, { [GLOBAL_PATH]: CONFIG }, KNOWN)
+  const ran: any[] = []
+  on('tool.call', async (_$: unknown, e: any) => {
+    ran.push(e)
+    return { result: { ok: true } }
+  })
+  await $.tool.call({ tool: 'WebSearch', query: `Contoso ${IP_PLACEHOLDER}` } as any)
+  await $.tool.call({ tool: 'WebFetch', url: `http://${IP_PLACEHOLDER}/Contoso`, prompt: `summarize Contoso ${IP_PLACEHOLDER}` } as any)
+  expect(ran[0].query).toBe(`Contoso ${IP_PLACEHOLDER}`)
+  expect(ran[1].url).toBe('http://10.0.0.5/Acme Corp')
+  expect(ran[1].prompt).toBe(`summarize Contoso ${IP_PLACEHOLDER}`)
+})
+
 test('passes tool calls through when no config exists', async ($, on) => {
   setupWorld(on, {})
   on('tool.call', async () => bash({ stdout: 'Acme Corp' }))

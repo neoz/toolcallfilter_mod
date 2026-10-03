@@ -37,6 +37,24 @@ describe('mask and unmask', () => {
     expect(masker.mask(once)).toBe(once)
   })
 
+  test('keeps issued placeholders intact when a term occurs inside them', async () => {
+    const config = { terms: { '2625': 'ACCT' }, regex: [CONFIG.regex[1]] }
+    const masker = createMasker(config, SECRET, {})
+    const once = masker.mask('host 10.0.0.5')
+    expect(once).toBe('host IP_d6da262530')
+    expect(masker.mask(once)).toBe(once)
+    expect(masker.unmask(masker.mask(once))).toBe('host 10.0.0.5')
+  })
+
+  test('restores placeholders that touch word characters', async () => {
+    const masker = createMasker({ terms: {}, regex: [{ name: 'EMP', pattern: 'E\\d{5}', flags: '' }] }, SECRET, {})
+    const original = 'user_E12345 and E12345abc and E12345_old'
+    const masked = masker.mask(original)
+    expect(masked).not.toContain('E12345')
+    expect(masker.mask(masked)).toBe(masked)
+    expect(masker.unmask(masked)).toBe(original)
+  })
+
   test('is deterministic across maskers without a shared reverse table', async () => {
     expect(createMasker(CONFIG, SECRET, {}).mask(ORIGINAL)).toBe(createMasker(CONFIG, SECRET, {}).mask(ORIGINAL))
   })
@@ -97,6 +115,19 @@ describe('deepMask and deepUnmask', () => {
     const masked = masker.deepMask(value)
     expect(masked).toEqual({ a: ['IP_d6da262530', 3, null, true], b: { c: 'Fabrikam' } })
     expect(masker.deepUnmask(masked)).toEqual(value)
+  })
+
+  test('leave base64 payloads of images and documents untouched', async () => {
+    const masker = createMasker(CONFIG, SECRET, {})
+    const readImage = { type: 'image', file: { base64: 'xxAcmexx', type: 'image/png', originalSize: 8 } }
+    expect(masker.deepMask(readImage)).toEqual(readImage)
+    const readPdf = { type: 'pdf', file: { filePath: '/docs/Acme.pdf', base64: 'Acme', originalSize: 4 } }
+    expect(masker.deepMask(readPdf)).toEqual({ type: 'pdf', file: { filePath: '/docs/Fabrikam.pdf', base64: 'Acme', originalSize: 4 } })
+    const apiBlock = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'Acme' } }
+    expect(masker.deepMask(apiBlock)).toEqual(apiBlock)
+    const mcpBlock = { type: 'image', data: 'Acme', mimeType: 'image/png' }
+    expect(masker.deepMask(mcpBlock)).toEqual(mcpBlock)
+    expect(masker.deepMask({ type: 'text', data: 'Acme' })).toEqual({ type: 'text', data: 'Fabrikam' })
   })
 })
 

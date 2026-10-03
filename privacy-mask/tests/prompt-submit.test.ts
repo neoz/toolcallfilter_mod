@@ -46,6 +46,23 @@ test('finds the global config through USERPROFILE when HOME is unset', async ($,
   expect(box.seen.text).toBe('Contoso')
 })
 
+test('prefers USERPROFILE over HOME for the global config', async ($, on) => {
+  setupWorld(on, { [GLOBAL_PATH]: CONFIG }, undefined, { HOME: '/msys/home/u', USERPROFILE: '/home/u' })
+  const box = captureSubmit(on)
+  await submit($, 'Acme Corp')
+  expect(box.seen.text).toBe('Contoso')
+})
+
+test('still sends the masked prompt when the reverse table cannot be saved', async ($, on) => {
+  // Registered before setupWorld so it answers first for the reverse table key.
+  on('store.set', { key: REVERSE_KEY }, async () => ({ deny: 'the store is over 4 MiB' }))
+  setupWorld(on, { [GLOBAL_PATH]: CONFIG })
+  const box = captureSubmit(on)
+  const result: any = await submit($, 'Acme Corp at 10.0.0.5')
+  expect(result.drop).toBeUndefined()
+  expect(box.seen.text).toBe(`Contoso at ${IP_PLACEHOLDER}`)
+})
+
 test('passes prompts through when no config exists', async ($, on) => {
   setupWorld(on, {})
   const box = captureSubmit(on)

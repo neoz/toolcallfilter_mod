@@ -18,6 +18,11 @@ Success criteria:
   text before any hook runs, for every prompt in `claude -p` / SDK sessions and for prompts
   typed mid-turn in interactive sessions. No mods API hook covers them; they stay local and
   are never sent to the model (verified in the smoke test).
+  Known limitation: an attachment row keeps the engine's raw payload (for example the
+  content of an `@`-mentioned file) "stored as made"; the model reads the masked rendering
+  (verified in the smoke test).
+- Known limitation: in `auto` permission mode the engine's permission classifier, a model
+  call the mod cannot hook, receives tool arguments after they were unmasked.
 
 ## Decisions
 
@@ -118,9 +123,9 @@ small value space (IPv4 has 2^32 values) could be brute-forced back to the origi
 2. Regex rules, in config order: replace each match with its HMAC placeholder and add
    `placeholder -> match` to the reverse table. If the reverse table already maps that
    placeholder to a different original (HMAC collision), throw so the hook fails closed.
-   Text already in placeholder form (`\b[A-Z][A-Z0-9_]*_[0-9a-f]{10}\b`) is left out of
-   regex matching: the text is split around those tokens and only the parts between
-   them are matched.
+   Text already in placeholder form (`<configured rule name>_[0-9a-f]{10}`, no word
+   boundaries) is left out of both the term pass and regex matching: the text is split
+   around those tokens and only the parts between them are processed.
 
 Idempotency: the same text is masked twice on its way in (`prompt.submit` then
 `session.append`; `tool.call` then `session.append`), so `mask(mask(x)) === mask(x)` is
@@ -129,8 +134,9 @@ term original guarantee it.
 
 `unmask(text)`:
 
-1. Regex rules in reverse config order: replace `\bNAME_[0-9a-f]{10}\b` tokens that exist
-   in the reverse table with their original; unknown tokens stay unchanged.
+1. Regex rules in reverse config order: replace `NAME_[0-9a-f]{10}` tokens (no word
+   boundaries, since a rule may match inside an identifier) that exist in the reverse
+   table with their original; unknown tokens stay unchanged.
 2. Terms: one alternation of replacements, longest first, single pass, back to originals.
 
 Properties:
@@ -146,7 +152,9 @@ the mods runtime, so `hooks/hmac.js` implements SHA-256 and HMAC-SHA256 in plain
 (synchronous). `mask` and `unmask` are synchronous.
 
 `deepMask(value)` / `deepUnmask(value)`: walk plain objects and arrays, apply to every
-string value, return a new structure; non-string leaves are returned as is.
+string value, return a new structure; non-string leaves are returned as is. Base64 media
+payloads are left untouched: any `base64` field, and `data` in an object whose `type` is
+`base64` or `image`.
 
 Known limitation: if real text already contains a string equal to a replacement value or
 an issued placeholder, unmask rewrites it to the original.
@@ -161,7 +169,10 @@ an issued placeholder, unmask rewrites it to the original.
   and reverse table load together, once per module load), written after a mask call
   that added entries. Entries are only ever added, and two sessions can only add identical entries
   for the same placeholder, so concurrent sessions do not conflict.
-- `$.store` is capped at 4 MiB shared; entries are tens of bytes, so this is accepted.
+- `$.store` is capped at 4 MiB shared; entries are tens of bytes, so this is accepted. A
+  failed save never blocks masking (the masked text does not depend on the table): the
+  mod shows one toast and keeps working with the in-memory table.
+- Global config home: `USERPROFILE` first, then `HOME`.
 
 ## Prompt cache
 
@@ -200,7 +211,7 @@ Rules the implementation must keep:
 
 | Event | Behavior |
 |---|---|
-| `tool.call` (before `next`) | deepUnmask all tool arguments except reserved `tool`, `tool_use_id`, `agentId`, `consent` |
+| `tool.call` (before `next`) | deepUnmask all tool arguments except reserved `tool`, `tool_use_id`, `agentId`, `consent`. Exceptions for arguments the engine forwards to a model call: `WebSearch` arguments stay masked; `WebFetch` unmasks only `url`, its `prompt` stays masked. |
 | `ui.render` `AssistantMessage` | unmask `props.text` |
 | `ui.render` `UserMessage` | unmask `props.text` |
 | `ui.render` `ToolUse` | deepUnmask `props.input` and `props.output` |

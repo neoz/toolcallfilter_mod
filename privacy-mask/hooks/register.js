@@ -20,7 +20,8 @@ function randomSecretHex() {
 async function loadState($) {
   const loaded = []
   try {
-    const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE'))
+    // USERPROFILE first: on Windows it is the home Claude Code uses, while a shell may set HOME elsewhere.
+    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
     const root = await $.session.root()
     const sources = [
       { label: 'global', path: home === undefined ? undefined : home + CONFIG_FILE },
@@ -62,11 +63,19 @@ async function activeState($) {
 }
 
 // Saves reverse-table entries issued since the last save, merged with what other sessions stored.
+// A failed save (the store is capped at 4 MiB) never blocks masking: the masked text does not
+// depend on the table, only later sessions lose the ability to show those originals.
 async function persist($, s) {
   if (!s.masker.takeAdded()) return
-  const stored = (await $.store.get(s.reverseKey)) ?? {}
-  Object.assign(s.reverse, { ...stored, ...s.reverse })
-  await $.store.set(s.reverseKey, s.reverse)
+  try {
+    const stored = (await $.store.get(s.reverseKey)) ?? {}
+    Object.assign(s.reverse, { ...stored, ...s.reverse })
+    await $.store.set(s.reverseKey, s.reverse)
+  } catch (err) {
+    if (s.saveFailed) return
+    s.saveFailed = true
+    $.ui.toast('privacy-mask: could not save the reverse table: ' + err.message)
+  }
 }
 
 // The masker for drawing, or null when nothing is masked; drawing never fails closed.
@@ -75,9 +84,14 @@ async function displayMasker($) {
   return s.mode === 'active' ? s.masker : null
 }
 
-// The tool's own arguments of a tool.call event, without the engine's reserved keys.
-function toolArguments(e) {
-  return Object.fromEntries(Object.entries(e).filter(([key]) => !RESERVED_TOOL_KEYS.has(key)))
+// The tool's own arguments of a tool.call event, without the engine's reserved keys, unmasked for
+// the tool to run on. Arguments the engine forwards to a model call stay masked: WebSearch's query
+// runs on the Anthropic API and WebFetch's prompt goes to a model; only WebFetch's url must be real.
+function unmaskedArguments(e, masker) {
+  const args = Object.fromEntries(Object.entries(e).filter(([key]) => !RESERVED_TOOL_KEYS.has(key)))
+  if (e.tool === 'WebSearch') return args
+  if (e.tool === 'WebFetch') return { ...args, url: masker.unmask(args.url) }
+  return masker.deepUnmask(args)
 }
 
 export function register(on) {
@@ -115,7 +129,7 @@ export function register(on) {
   on('tool.call', async ($, e, next) => {
     const s = await activeState($)
     if (s === null) return next(e)
-    const result = await next({ ...e, ...s.masker.deepUnmask(toolArguments(e)) })
+    const result = await next({ ...e, ...unmaskedArguments(e, s.masker) })
     let masked
     if (result.deny !== undefined) {
       masked = { deny: s.masker.mask(result.deny) }

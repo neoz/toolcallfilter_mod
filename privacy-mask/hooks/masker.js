@@ -1,8 +1,5 @@
 import { fromHex, hmacSha256, toHex, utf8 } from './hmac.js'
 
-// Any placeholder this mod can issue; text in this form is never masked again.
-const ANY_PLACEHOLDER = /\b[A-Z][A-Z0-9_]*_[0-9a-f]{10}\b/g
-
 function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -14,11 +11,19 @@ function alternation(strings) {
   return new RegExp(sorted.map(escapeRegex).join('|'), 'g')
 }
 
+// Base64 payloads of images and documents: a Read result's `base64`, and the `data` of an API or
+// MCP image/base64 block. Rewriting them would corrupt the media.
+function isBinaryField(object, key) {
+  return key === 'base64' || (key === 'data' && (object.type === 'base64' || object.type === 'image'))
+}
+
 function mapStrings(value, fn) {
   if (typeof value === 'string') return fn(value)
   if (Array.isArray(value)) return value.map((item) => mapStrings(item, fn))
   if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, mapStrings(item, fn)]))
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, isBinaryField(value, key) ? item : mapStrings(item, fn)]),
+    )
   }
   return value
 }
@@ -33,8 +38,13 @@ export function createMasker(config, secretHex, reverse) {
   const rules = config.regex.map((rule) => ({
     name: rule.name,
     pattern: new RegExp(rule.pattern, rule.flags.includes('g') ? rule.flags : rule.flags + 'g'),
-    token: new RegExp(`\\b${rule.name}_[0-9a-f]{10}\\b`, 'g'),
+    // No word boundaries: a rule may match inside an identifier, so its placeholder can touch
+    // word characters (user_EMP_0123456789). Only tokens in the reverse table are restored.
+    token: new RegExp(`${rule.name}_[0-9a-f]{10}`, 'g'),
   }))
+  // Placeholders of the configured rules; text in this form is never masked again.
+  const anyPlaceholder = alternation(rules.map((rule) => rule.name + '_'))
+  const placeholderToken = anyPlaceholder === null ? null : new RegExp(`(?:${anyPlaceholder.source})[0-9a-f]{10}`, 'g')
   const key = fromHex(secretHex)
   const issued = new Map()
   let added = false
@@ -56,20 +66,23 @@ export function createMasker(config, secretHex, reverse) {
     return id
   }
 
-  function maskRule(text, rule) {
-    const replace = (part) => part.replace(rule.pattern, (match) => (match === '' ? match : placeholder(rule.name, match)))
+  // Applies fn to the parts of text between issued placeholders, leaving the placeholders as they are.
+  function outsidePlaceholders(text, fn) {
+    if (placeholderToken === null) return fn(text)
     let out = ''
     let last = 0
-    for (const token of text.matchAll(ANY_PLACEHOLDER)) {
-      out += replace(text.slice(last, token.index)) + token[0]
+    for (const token of text.matchAll(placeholderToken)) {
+      out += fn(text.slice(last, token.index)) + token[0]
       last = token.index + token[0].length
     }
-    return out + replace(text.slice(last))
+    return out + fn(text.slice(last))
   }
 
   function mask(text) {
-    let out = termOriginals === null ? text : text.replace(termOriginals, (original) => terms[original])
-    for (const rule of rules) out = maskRule(out, rule)
+    let out = termOriginals === null ? text : outsidePlaceholders(text, (part) => part.replace(termOriginals, (original) => terms[original]))
+    for (const rule of rules) {
+      out = outsidePlaceholders(out, (part) => part.replace(rule.pattern, (match) => (match === '' ? match : placeholder(rule.name, match))))
+    }
     return out
   }
 
