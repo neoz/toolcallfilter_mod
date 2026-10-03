@@ -21,10 +21,16 @@ Bash runs:       ssh 10.0.0.5
 
 ## Install
 
+The mod is the `privacy-mask/` directory of this repository. Clone it:
+
+```bash
+git clone https://github.com/neoz/toolcallfilter_mod.git
+```
+
 Load the plugin directory for one session:
 
 ```bash
-claude --plugin-dir /path/to/privacy-mask
+claude --plugin-dir /path/to/toolcallfilter_mod/privacy-mask
 ```
 
 To load it in every session, set `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`.
@@ -33,7 +39,7 @@ Use an absolute path; separate several directories with `:`, or with `;` on Wind
 ```json
 {
   "env": {
-    "CLAUDE_CODE_PLUGIN_DIRS": "D:/tools/privacy-mask"
+    "CLAUDE_CODE_PLUGIN_DIRS": "D:/tools/toolcallfilter_mod/privacy-mask"
   }
 }
 ```
@@ -171,7 +177,7 @@ and the mod shows one notice; older placeholders may then show unresolved in lat
 - **Every prompt is blocked**: `/privacy-mask` shows the config error. Fix the file and run
   `/reload-plugins`.
 - **The mod does not load**: check `claude --version`, and run
-  `claude plugin validate /path/to/privacy-mask`.
+  `claude plugin validate /path/to/toolcallfilter_mod/privacy-mask`.
 
 ## Development
 
@@ -184,10 +190,11 @@ claude --plugin-dir .                   # hot-reloads on save
 
 | File | Purpose |
 |---|---|
-| `hooks/register.js` | All hooks and every mods API call |
-| `hooks/masker.js` | Deterministic mask and unmask |
-| `hooks/config.js` | Config parsing, merging and validation |
-| `hooks/hmac.js` | SHA-256 and HMAC-SHA256 in plain JS (the mods runtime has no usable `crypto.subtle`) |
+| `privacy-mask/hooks/register.js` | All hooks and every mods API call |
+| `privacy-mask/hooks/masker.js` | Deterministic mask and unmask |
+| `privacy-mask/hooks/config.js` | Config parsing, merging and validation |
+| `privacy-mask/hooks/hmac.js` | SHA-256 and HMAC-SHA256 in plain JS (the mods runtime has no usable `crypto.subtle`) |
+| `privacy-mask/tests/` | Tests run by `claude plugin test` |
 
-Design and decisions: `docs/superpowers/specs/2026-10-03-privacy-mask-design.md` in the
-repository.
+Design and decisions: [design spec](docs/superpowers/specs/2026-10-03-privacy-mask-design.md),
+[implementation plan](docs/superpowers/plans/2026-10-03-privacy-mask.md).
