@@ -1,0 +1,14 @@
+{
+  "name": "toolcallfilter-mod",
+  "description": "Claude Code mods for keeping sensitive values away from the model",
+  "owner": {
+    "name": "neoz"
+  },
+  "plugins": [
+    {
+      "name": "privacy-mask",
+      "source": "./privacy-mask",
+      "description": "Masks configured terms and regex matches in everything the model reads and restores them in what you see and what tools run"
+    }
+  ]
+}

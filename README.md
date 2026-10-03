@@ -21,7 +21,29 @@ Bash runs:       ssh 10.0.0.5
 
 ## Install
 
-The mod is the `privacy-mask/` directory of this repository. Clone it:
+This repository is a plugin marketplace. In your shell, add it once and install the plugin:
+
+```bash
+claude plugin marketplace add neoz/toolcallfilter_mod
+claude plugin install privacy-mask@toolcallfilter-mod
+```
+
+Or from inside a session:
+
+```
+/plugin install privacy-mask --marketplace neoz/toolcallfilter_mod
+```
+
+If a session is already open, run `/reload-plugins` to load it. To update later:
+
+```bash
+claude plugin update privacy-mask@toolcallfilter-mod
+```
+
+### Load from a checkout
+
+To try a local copy without installing, clone the repository; the mod is its
+`privacy-mask/` directory:
 
 ```bash
 git clone https://github.com/neoz/toolcallfilter_mod.git
@@ -195,6 +217,11 @@ claude --plugin-dir .                   # hot-reloads on save
 | `privacy-mask/hooks/config.js` | Config parsing, merging and validation |
 | `privacy-mask/hooks/hmac.js` | SHA-256 and HMAC-SHA256 in plain JS (the mods runtime has no usable `crypto.subtle`) |
 | `privacy-mask/tests/` | Tests run by `claude plugin test` |
+
+To release a change, increment `version` in `privacy-mask/.claude-plugin/plugin.json` and
+push: installed copies only update when the version changes. The marketplace catalog is
+`.claude-plugin/marketplace.json`; check it with `claude plugin validate .` from the
+repository root.
 
 Design and decisions: [design spec](docs/superpowers/specs/2026-10-03-privacy-mask-design.md),
 [implementation plan](docs/superpowers/plans/2026-10-03-privacy-mask.md).
