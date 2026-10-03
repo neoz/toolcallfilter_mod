@@ -69,6 +69,12 @@ async function persist($, s) {
   await $.store.set(s.reverseKey, s.reverse)
 }
 
+// The masker for drawing, or null when nothing is masked; drawing never fails closed.
+async function displayMasker($) {
+  const s = await state($)
+  return s.mode === 'active' ? s.masker : null
+}
+
 // The tool's own arguments of a tool.call event, without the engine's reserved keys.
 function toolArguments(e) {
   return Object.fromEntries(Object.entries(e).filter(([key]) => !RESERVED_TOOL_KEYS.has(key)))
@@ -184,5 +190,31 @@ export function register(on) {
     if (e.message.role === undefined) return next(e)
     const content = e.message.content.map((block) => mapBlockText(block, () => WITHHELD))
     return next({ ...e, message: { ...e.message, content } })
+  })
+
+  on('ui.render', { component: ['AssistantMessage', 'UserMessage'] }, async ($, e, next) => {
+    const masker = await displayMasker($)
+    if (masker === null) return next(e)
+    return next({ ...e, props: { ...e.props, text: masker.unmask(e.props.text) } })
+  })
+
+  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
+    const masker = await displayMasker($)
+    if (masker === null) return next(e)
+    const props = { ...e.props, input: masker.deepUnmask(e.props.input) }
+    if (e.props.output !== undefined) props.output = masker.deepUnmask(e.props.output)
+    return next({ ...e, props })
+  })
+
+  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
+    const masker = await displayMasker($)
+    if (masker === null) return next(e)
+    return next({ ...e, props: { ...e.props, output: masker.deepUnmask(e.props.output) } })
+  })
+
+  on('ui.render', { component: 'AskUserQuestion' }, async ($, e, next) => {
+    const masker = await displayMasker($)
+    if (masker === null) return next(e)
+    return next({ ...e, props: { ...e.props, questions: masker.deepUnmask(e.props.questions) } })
   })
 }
