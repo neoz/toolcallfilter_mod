@@ -13,7 +13,11 @@ Success criteria:
 - The model (Anthropic API) only ever receives masked text for every source the mod covers.
 - The user sees original values in the terminal / Desktop transcript.
 - Files written and commands run by tools contain original values.
-- The stored session transcript (`.jsonl`) contains only masked text.
+- The conversation rows stored in the session transcript (`.jsonl`) contain only masked text.
+  Known limitation: Claude Code writes `queue-operation` bookkeeping rows with the raw prompt
+  text before any hook runs, for every prompt in `claude -p` / SDK sessions and for prompts
+  typed mid-turn in interactive sessions. No mods API hook covers them; they stay local and
+  are never sent to the model (verified in the smoke test).
 
 ## Decisions
 
