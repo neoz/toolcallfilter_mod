@@ -1,0 +1,4 @@
+{
+  "description": "The privacy-mask hooks module",
+  "modules": ["./register.js"]
+}
