@@ -23,19 +23,32 @@ Success criteria:
 | Prompt cache | Masking is a deterministic function of (config, secret, text), so request prefixes stay byte-identical across requests and sessions. |
 | Supported surfaces | Terminal CLI and Desktop Code tab. Unmasking happens at the render layer. `claude -p` and the VS Code chat panel show placeholders (known limitation). |
 | Config location | `~/.claude/privacy-mask.json` (global) merged with `<project>/.claude/privacy-mask.json` (project wins on conflict). |
-| Approach | Mask at every source that feeds the model; unmask at tool input and at the render layer. `session.append` as defense-in-depth if verified. |
+| Approach | Mask at every source that feeds the model, with `session.append` masking every conversation row; unmask at tool input and at the render layer. |
 | Failure policy | Fail closed for every masking hook. |
 
 Rejected approaches:
 
-- Single choke point via `session.append` only: not in public types (2.1.277); unclear whether the user prompt row is appended before the first request of a turn.
+- `session.append` alone: it covers conversation rows but not the system prompt, tool
+  descriptions, or the structured tool record kept in the transcript file.
 - Local HTTP proxy via `ANTHROPIC_BASE_URL`: full coverage, but not a mod, needs a separate process and SSE handling.
 
-## Key constraint from the mods API
+## Facts from the v2.1.288 mods API (verified against local types and probes)
 
-`turn.step` input pins the request messages (`messageCount` only; "the messages are the
-engine's"). A mod cannot rewrite the outgoing request in one place, so it must mask each
-source of text that enters the conversation or the system prompt.
+- `turn.step` input pins the request messages (`messageCount` only; "the messages are the
+  engine's"). A mod cannot rewrite the outgoing request in one place.
+- `session.append` fires for every row a conversation keeps (doors: `prompt`, `command`,
+  `response`, `tool-result`, `tool-message`, `delivery`, `attachment`, `hook-context`,
+  `note`, `compaction`, `notice`). `message.role` says under which role a request carries
+  the row. Rewritable: text blocks' `text`, and a `tool_result`'s `content` and
+  `is_error`; thinking and `tool_use` blocks are put back by the engine.
+- `tool.call`: "A hook that returns the object it got makes core use [its messages]
+  verbatim." Masking must therefore return a fresh `{ result, context }` without `ref`
+  and `text`, so core validates and re-maps the masked `result`.
+- `ui.render` rewrites change only the drawing, never the stored message.
+- `globalThis.crypto.subtle` is not usable in the mods runtime (`importKey` is undefined);
+  `crypto.getRandomValues` and `TextEncoder` work.
+- `$.fs.read` paths are normalized to the platform (`/home/u/x` becomes `C:\home\u\x` on
+  Windows); `$.env.get` needs literal names.
 
 ## Plugin layout
 
@@ -46,6 +59,7 @@ privacy-mask/
 │   ├── hooks.json        "modules": ["./register.js"]
 │   ├── register.js       wires hooks; all $ calls (fs, store, ui, command) live here
 │   ├── config.js         pure: parse, validate, merge configs
+│   ├── hmac.js           pure: SHA-256 and HMAC-SHA256 in plain JS
 │   └── masker.js         pure: mask, unmask, deepMask, deepUnmask
 └── tests/*.test.ts
 ```
@@ -81,10 +95,8 @@ Validation errors (config enters blocked mode):
 - Regex rule without `name` matching `^[A-Z][A-Z0-9_]*$`, or without `pattern`.
 - Pattern or flags that do not compile. The `g` flag is always added by the masker.
 - Two terms mapping to the same replacement (would make unmask ambiguous).
-
-Validation warnings (shown, not blocking):
-
-- A replacement value equal to some term's original.
+- A replacement that contains any term original as a substring (would make masking
+  non-idempotent, see below).
 
 ## Mask engine (`masker.js`)
 
@@ -102,6 +114,14 @@ small value space (IPv4 has 2^32 values) could be brute-forced back to the origi
 2. Regex rules, in config order: replace each match with its HMAC placeholder and add
    `placeholder -> match` to the reverse table. If the reverse table already maps that
    placeholder to a different original (HMAC collision), throw so the hook fails closed.
+   Text already in placeholder form (`\b[A-Z][A-Z0-9_]*_[0-9a-f]{10}\b`) is left out of
+   regex matching: the text is split around those tokens and only the parts between
+   them are matched.
+
+Idempotency: the same text is masked twice on its way in (`prompt.submit` then
+`session.append`; `tool.call` then `session.append`), so `mask(mask(x)) === mask(x)` is
+required. The placeholder skip above and the config rule that no replacement contains a
+term original guarantee it.
 
 `unmask(text)`:
 
@@ -117,10 +137,9 @@ Properties:
 - Nested cases (a regex matching a term replacement) round-trip because unmask runs in
   exact reverse order.
 
-HMAC implementation: the hooks module may only import files inside the plugin, so
-`node:crypto` is not available. The plan must verify whether `globalThis.crypto.subtle`
-works in the mods runtime; if it does not, the plugin ships a small pure-JS SHA-256/HMAC
-in `hooks/hmac.js`. If `crypto.subtle` is used, `mask` becomes async.
+HMAC implementation: `node:crypto` cannot be imported and `crypto.subtle` is unusable in
+the mods runtime, so `hooks/hmac.js` implements SHA-256 and HMAC-SHA256 in plain JS
+(synchronous). `mask` and `unmask` are synchronous.
 
 `deepMask(value)` / `deepUnmask(value)`: walk plain objects and arrays, apply to every
 string value, return a new structure; non-string leaves are returned as is.
@@ -134,8 +153,9 @@ an issued placeholder, unmask rewrites it to the original.
   under `privacy-mask:secret`; created once, shared by every session on the machine, never
   rotated by the mod. It never leaves the machine.
 - Reverse table: stored in `$.store` under `privacy-mask:reverse:<project root>`
-  (`$.session.root()`). Loaded at `session.start`, written after a mask call that added
-  entries. Entries are only ever added, and two sessions can only add identical entries
+  (`$.session.root()`). Loaded lazily by the first hook that needs it (config, secret
+  and reverse table load together, once per module load), written after a mask call
+  that added entries. Entries are only ever added, and two sessions can only add identical entries
   for the same placeholder, so concurrent sessions do not conflict.
 - `$.store` is capped at 4 MiB shared; entries are tens of bytes, so this is accepted.
 
@@ -148,7 +168,8 @@ Rules the implementation must keep:
   influence the masked text.
 - The mod never adds dynamic text (timestamps, counts, status) to the system prompt,
   context, tool descriptions, or prompts.
-- History is masked once, when it enters the conversation, and never re-masked.
+- History is masked when it enters the conversation; a second mask of the same text
+  (idempotent) produces identical bytes, and stored rows are never re-masked later.
 - Unmasking happens only at the render layer and at tool input, neither of which is part
   of a request.
 - Changing the config (adding or removing a term or rule, reordering rules) changes the
@@ -163,13 +184,13 @@ Rules the implementation must keep:
 | Event | Behavior |
 |---|---|
 | `prompt.submit` | `next({ ...e, text: mask(e.text), context: e.context?.map(mask) })` |
-| `tool.call` (after `next`) | deepMask `result`, `context`, and `deny`; return without core's `ref` and `text` so core re-maps the masked `result` (must be verified, see below) |
+| `tool.call` (after `next`) | Answered: return a fresh `{ result: deepMask(result), context: context?.map(mask) }` without `ref` and `text`. Errored (`isError`): return `{ deny: mask(text) }`. Denied: return `{ deny: mask(deny) }`. |
 | `prompt.section` | `await next(e)`, return `{ text: mask(text) }` (null stays null) |
-| `prompt.context` | mask every block |
+| `prompt.context` | mask every block; return `{ blocks }` only, without `instructionFiles`, so the engine does not re-render `claudeMd` from the unmasked files |
 | `prompt.attachment` | mask `text` |
 | `skill.prompt` | mask `text` |
 | `tool.describe` | mask `description` |
-| `session.append` | deepMask the row content before storage, only if local 2.1.288 types confirm the event semantics |
+| `session.append` | For rows with `message.role` set: mask every text block's `text` and every `tool_result`'s `content` (string, or its text blocks); pass the rest through. Rows without a role (notices) pass unchanged. |
 
 ### Inbound (unmask what the user sees and tools execute)
 
@@ -178,27 +199,34 @@ Rules the implementation must keep:
 | `tool.call` (before `next`) | deepUnmask all tool arguments except reserved `tool`, `tool_use_id`, `agentId`, `consent` |
 | `ui.render` `AssistantMessage` | unmask `props.text` |
 | `ui.render` `UserMessage` | unmask `props.text` |
-| `ui.render` `ToolUse`, `ToolResult` | deepUnmask `props` |
+| `ui.render` `ToolUse` | deepUnmask `props.input` and `props.output` |
+| `ui.render` `ToolResult` | deepUnmask `props.output` |
+| `ui.render` `AskUserQuestion` | deepUnmask `props.questions` |
 
-Render rewrites change only the drawing; stored messages stay masked.
+Render rewrites change only the drawing; stored messages stay masked. Read-only props
+(`onScreen`, ids, flags) are passed through untouched.
 
-### Verification gate: `tool.call` result `ref`
+### Verification: `tool.call` result `ref`
 
-Core's result is `{ ref, result, text }`, where `ref` names core's own messages. If core
-reuses those messages instead of the hook's returned `result`, original tool output would
-reach the model. Before shipping, a test (and the manual smoke test) must prove the model
-receives the masked output. If it cannot be proven, stop and report instead of shipping.
+The types state that returning core's object makes core use its own (unmasked) messages
+verbatim. A hook test asserts the returned object has no `ref` and no `text` and that its
+`result` is masked. The manual smoke test confirms in the session `.jsonl` that the tool
+result the model read is masked. If it is not, stop and report instead of shipping.
 
 ## Error handling
 
-- No config file found: pass-through mode; one notice at `session.start`.
+- No config file found: pass-through mode; one `$.ui.toast` at `session.start`.
 - Config invalid: blocked mode; `prompt.submit` returns `{ drop: 'privacy-mask: config error in <file>: <reason>' }` until the config is fixed and `/reload-plugins` is run.
 - Each masking hook has a `.catch` that fails closed:
   - `prompt.submit` -> `{ drop: reason }`
   - `tool.call` -> `{ deny: reason }`
-  - `prompt.section`, `prompt.attachment`, `skill.prompt` -> `{ text: null }`
+  - `prompt.section`, `prompt.attachment` -> `{ text: null }`
+  - `skill.prompt` -> `{ text: '' }` (its result type does not allow null)
   - `prompt.context` -> `{ blocks: [] }`
   - `tool.describe` -> `{ description: '' }`
+  - `session.append` -> a hook may not refuse an engine row, so its `.catch` calls `next`
+    with every text block and `tool_result` content replaced by
+    `[privacy-mask: content withheld]`
 - Render-layer unmask hooks have no `.catch`: a failure only affects display and leaves the
   model side masked.
 
@@ -206,7 +234,7 @@ receives the masked output. If it cannot be proven, stop and report instead of s
 
 `/privacy-mask` (runs without a Claude turn) prints: loaded config files, term count,
 regex rule count, reverse table size for the project, current mode (active / pass-through /
-blocked) and any config errors or warnings.
+blocked) and any config errors.
 
 ## Testing
 
@@ -218,11 +246,13 @@ Run with `claude plugin test`.
 - Prompt cache determinism: the same input masks to the same output across two masker
   instances with the same secret and an empty reverse table; HMAC output matches a known
   test vector; a forced collision throws.
+- Idempotency: `mask(mask(x)) === mask(x)` for terms, regex, and nested cases.
 - `config`: merge precedence; invalid JSON, bad regex, bad rule name, duplicate
-  replacement errors; replacement-equals-original warning.
-- Hooks: `prompt.submit` masks; `tool.call` unmasks input before the tool and masks the
-  result after it; `ref` verification test; `ui.render` unmasks all four sites; invalid
-  config drops prompts; a throwing hook fails closed.
+  replacement, replacement-contains-original errors.
+- Hooks: `prompt.submit` masks; `session.append` masks text and tool_result rows and
+  leaves notices; `tool.call` unmasks input before the tool and masks the result after
+  it with no `ref`/`text`; `ui.render` unmasks all five sites; invalid config drops
+  prompts; a throwing hook fails closed.
 - Manual smoke test: `claude --plugin-dir ./privacy-mask`, ask Claude to read a file with
   an IP and an email and edit it; confirm the screen shows originals, the file on disk has
   originals, and the session `.jsonl` contains only placeholders.
