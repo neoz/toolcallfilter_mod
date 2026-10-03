@@ -1,11 +1,12 @@
 import { mergeConfigs, parseConfig, validateConfig } from './config.js'
 import { toHex } from './hmac.js'
-import { createMasker } from './masker.js'
+import { createMasker, mapBlockText } from './masker.js'
 
 const SECRET_KEY = 'privacy-mask:secret'
 const REVERSE_PREFIX = 'privacy-mask:reverse:'
 const CONFIG_FILE = '/.claude/privacy-mask.json'
 const RESERVED_TOOL_KEYS = new Set(['tool', 'tool_use_id', 'agentId', 'consent'])
+const WITHHELD = '[privacy-mask: content withheld]'
 
 // Loaded once per module load; /reload-plugins re-runs the module and loads again.
 let statePromise
@@ -125,4 +126,63 @@ export function register(on) {
     await persist($, s)
     return masked
   }).catch(async () => ({ deny: 'privacy-mask: the tool result was withheld because masking failed.' }))
+
+  on('prompt.section', async ($, e, next) => {
+    const s = await activeState($)
+    const result = await next(e)
+    if (s === null || result.text === null) return result
+    const masked = { text: s.masker.mask(result.text) }
+    await persist($, s)
+    return masked
+  }).catch(async () => ({ text: null }))
+
+  on('prompt.context', async ($, e, next) => {
+    const s = await activeState($)
+    const result = await next(e)
+    if (s === null) return result
+    // Without instructionFiles, so the engine cannot re-render claudeMd from the unmasked files.
+    const masked = { blocks: result.blocks.map((block) => ({ ...block, text: s.masker.mask(block.text) })) }
+    await persist($, s)
+    return masked
+  }).catch(async () => ({ blocks: [] }))
+
+  on('prompt.attachment', async ($, e, next) => {
+    const s = await activeState($)
+    const result = await next(e)
+    if (s === null || result.text === null) return result
+    const masked = { text: s.masker.mask(result.text) }
+    await persist($, s)
+    return masked
+  }).catch(async () => ({ text: null }))
+
+  on('skill.prompt', async ($, e, next) => {
+    const s = await activeState($)
+    const result = await next(e)
+    if (s === null) return result
+    const masked = { text: s.masker.mask(result.text) }
+    await persist($, s)
+    return masked
+  }).catch(async () => ({ text: '' }))
+
+  on('tool.describe', async ($, e, next) => {
+    const s = await activeState($)
+    const result = await next(e)
+    if (s === null) return result
+    const masked = { ...result, description: s.masker.mask(result.description) }
+    await persist($, s)
+    return masked
+  }).catch(async () => ({ description: '' }))
+
+  on('session.append', async ($, e, next) => {
+    const s = await activeState($)
+    if (s === null || e.message.role === undefined) return next(e)
+    const content = e.message.content.map((block) => mapBlockText(block, (text) => s.masker.mask(text)))
+    await persist($, s)
+    return next({ ...e, message: { ...e.message, content } })
+  }).catch(async ($, e, next) => {
+    // A hook may not refuse an engine row, so the row is kept with its text withheld.
+    if (e.message.role === undefined) return next(e)
+    const content = e.message.content.map((block) => mapBlockText(block, () => WITHHELD))
+    return next({ ...e, message: { ...e.message, content } })
+  })
 }
