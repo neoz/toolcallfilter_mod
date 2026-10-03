@@ -1,6 +1,6 @@
 import { mergeConfigs, parseConfig, validateConfig } from './config.js'
 import { toHex } from './hmac.js'
-import { createMasker, mapBlockText } from './masker.js'
+import { createMasker, mapMessageText } from './masker.js'
 
 const SECRET_KEY = 'privacy-mask:secret'
 const REVERSE_PREFIX = 'privacy-mask:reverse:'
@@ -196,14 +196,13 @@ export function register(on) {
   on('session.append', async ($, e, next) => {
     const s = await activeState($)
     if (s === null || e.message.role === undefined) return next(e)
-    const content = e.message.content.map((block) => mapBlockText(block, (text) => s.masker.mask(text)))
+    const message = mapMessageText(e.message, (text) => s.masker.mask(text))
     await persist($, s)
-    return next({ ...e, message: { ...e.message, content } })
+    return next({ ...e, message })
   }).catch(async ($, e, next) => {
     // A hook may not refuse an engine row, so the row is kept with its text withheld.
     if (e.message.role === undefined) return next(e)
-    const content = e.message.content.map((block) => mapBlockText(block, () => WITHHELD))
-    return next({ ...e, message: { ...e.message, content } })
+    return next({ ...e, message: mapMessageText(e.message, () => WITHHELD) })
   })
 
   on('ui.render', { component: ['AssistantMessage', 'UserMessage'] }, async ($, e, next) => {

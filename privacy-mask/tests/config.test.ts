@@ -25,7 +25,7 @@ describe('parseConfig', () => {
     expect(errorOf(() => parseConfig('[]', 'g.json'))).toBe('g.json: the config must be a JSON object')
     expect(errorOf(() => parseConfig('{"terms":[]}', 'g.json'))).toBe('g.json: "terms" must be an object')
     expect(errorOf(() => parseConfig('{"terms":{"a":""}}', 'g.json'))).toBe(
-      'g.json: term "a" must map a non-empty string to a non-empty string',
+      'g.json: term #1 must map a non-empty string to a non-empty string',
     )
     expect(errorOf(() => parseConfig('{"regex":{}}', 'g.json'))).toBe('g.json: "regex" must be an array')
     expect(errorOf(() => parseConfig('{"regex":[{"name":"ip","pattern":"x"}]}', 'g.json'))).toStartWith(
@@ -34,15 +34,25 @@ describe('parseConfig', () => {
     expect(errorOf(() => parseConfig('{"regex":[{"name":"IP","pattern":""}]}', 'g.json'))).toBe(
       'g.json: regex rule "IP" needs a non-empty "pattern"',
     )
-    expect(errorOf(() => parseConfig('{"regex":[{"name":"IP","pattern":"("}]}', 'g.json'))).toStartWith(
-      'g.json: regex rule "IP": ',
+    expect(errorOf(() => parseConfig('{"regex":[{"name":"IP","pattern":"("}]}', 'g.json'))).toBe(
+      'g.json: regex rule "IP" has an invalid pattern or flags',
     )
-    expect(errorOf(() => parseConfig('{"regex":[{"name":"IP","pattern":"x","flags":"q"}]}', 'g.json'))).toStartWith(
-      'g.json: regex rule "IP": ',
+    expect(errorOf(() => parseConfig('{"regex":[{"name":"IP","pattern":"x","flags":"q"}]}', 'g.json'))).toBe(
+      'g.json: regex rule "IP" has an invalid pattern or flags',
     )
     expect(errorOf(() => parseConfig('{"regex":[{"name":"IP","pattern":"x"},{"name":"IP","pattern":"y"}]}', 'g.json'))).toBe(
       'g.json: regex rule "IP" is declared twice',
     )
+  })
+
+  // Error messages reach toasts, /privacy-mask and drop notices, so they never quote a term
+  // original or the file text around a syntax error.
+  test('keeps term originals out of error messages', async () => {
+    const jsonError = errorOf(() => parseConfig('{"terms":{"Acme Corp": Secret}}', 'g.json'))
+    expect(jsonError).toStartWith('g.json: invalid JSON')
+    expect(jsonError).not.toContain('Secret')
+    const regexError = errorOf(() => parseConfig('{"regex":[{"name":"IP","pattern":"Acme(Corp"}]}', 'g.json'))
+    expect(regexError).not.toContain('Acme')
   })
 })
 
@@ -76,16 +86,22 @@ describe('mergeConfigs', () => {
 describe('validateConfig', () => {
   test('rejects two terms with the same replacement', async () => {
     expect(errorOf(() => validateConfig({ terms: { a: 'X', b: 'X' }, regex: [] }))).toBe(
-      'terms "a" and "b" share the replacement "X"',
+      'two terms share the replacement "X"',
     )
   })
 
   test('rejects a replacement that contains a term original', async () => {
     expect(errorOf(() => validateConfig({ terms: { Acme: 'Acme Inc' }, regex: [] }))).toBe(
-      'replacement "Acme Inc" contains the term "Acme"',
+      'replacement "Acme Inc" contains the original of the term replaced by "Acme Inc"',
     )
     expect(errorOf(() => validateConfig({ terms: { Acme: 'Contoso', Bob: 'xBobx' }, regex: [] }))).toBe(
-      'replacement "xBobx" contains the term "Bob"',
+      'replacement "xBobx" contains the original of the term replaced by "xBobx"',
+    )
+  })
+
+  test('rejects a term original that contains a replacement', async () => {
+    expect(errorOf(() => validateConfig({ terms: { 'Contoso Ltd': 'X', Acme: 'Contoso' }, regex: [] }))).toBe(
+      'the original of the term replaced by "X" contains the replacement "Contoso"',
     )
   })
 

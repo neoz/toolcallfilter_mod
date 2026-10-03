@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { createMasker, mapBlockText } from '../hooks/masker.js'
+import { createMasker, mapBlockText, mapMessageText } from '../hooks/masker.js'
 
 const SECRET = 'ab'.repeat(32)
 const CONFIG = {
@@ -44,6 +44,14 @@ describe('mask and unmask', () => {
     expect(once).toBe('host IP_d6da262530')
     expect(masker.mask(once)).toBe(once)
     expect(masker.unmask(masker.mask(once))).toBe('host 10.0.0.5')
+  })
+
+  test('stays idempotent when an original spans a replacement and the text next to it', async () => {
+    const masker = createMasker({ terms: { Acme: 'Zeta', aZ: 'Q' }, regex: [] }, SECRET, {})
+    const once = masker.mask('aAcme')
+    expect(once).toBe('aZeta')
+    expect(masker.mask(once)).toBe(once)
+    expect(masker.unmask(once)).toBe('aAcme')
   })
 
   test('restores placeholders that touch word characters', async () => {
@@ -144,6 +152,31 @@ describe('mapBlockText', () => {
     expect(
       mapBlockText({ type: 'tool_result', tool_use_id: 't', content: [{ type: 'text', text: 'c' }, { type: 'image' }] }, upper),
     ).toEqual({ type: 'tool_result', tool_use_id: 't', content: [{ type: 'text', text: 'C' }, { type: 'image' }] })
+  })
+
+  test('maps every block of a row a request carries, as the session.append hook and its .catch do', async () => {
+    const row = {
+      type: 'user',
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Acme' },
+        { type: 'tool_result', tool_use_id: 't', content: 'Acme' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'x' } },
+      ],
+    }
+    expect(mapMessageText(row, () => '[withheld]')).toEqual({
+      ...row,
+      content: [
+        { type: 'text', text: '[withheld]' },
+        { type: 'tool_result', tool_use_id: 't', content: '[withheld]' },
+        row.content[2],
+      ],
+    })
+  })
+
+  test('leaves rows without a role unchanged', async () => {
+    const notice = { type: 'system', name: 'local_command', content: [{ type: 'text', text: 'Acme' }] }
+    expect(mapMessageText(notice, () => '[withheld]')).toBe(notice)
   })
 
   test('leaves other blocks unchanged', async () => {

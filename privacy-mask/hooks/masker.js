@@ -17,6 +17,25 @@ function isBinaryField(object, key) {
   return key === 'base64' || (key === 'data' && (object.type === 'base64' || object.type === 'image'))
 }
 
+// One regex matching what either regex matches; null when both are null.
+function either(first, second) {
+  const sources = [first, second].filter((regex) => regex !== null).map((regex) => `(?:${regex.source})`)
+  return sources.length === 0 ? null : new RegExp(sources.join('|'), 'g')
+}
+
+// Applies fn to the parts of text between matches of token (all of it when token is null),
+// keeping the matches as they are.
+function outside(text, token, fn) {
+  if (token === null) return fn(text)
+  let out = ''
+  let last = 0
+  for (const match of text.matchAll(token)) {
+    out += fn(text.slice(last, match.index)) + match[0]
+    last = match.index + match[0].length
+  }
+  return out + fn(text.slice(last))
+}
+
 function mapStrings(value, fn) {
   if (typeof value === 'string') return fn(value)
   if (Array.isArray(value)) return value.map((item) => mapStrings(item, fn))
@@ -45,6 +64,9 @@ export function createMasker(config, secretHex, reverse) {
   // Placeholders of the configured rules; text in this form is never masked again.
   const anyPlaceholder = alternation(rules.map((rule) => rule.name + '_'))
   const placeholderToken = anyPlaceholder === null ? null : new RegExp(`(?:${anyPlaceholder.source})[0-9a-f]{10}`, 'g')
+  // The term pass also leaves replacements alone, so an original can never match across a
+  // replacement and the text next to it on a second pass.
+  const termProtected = either(placeholderToken, termReplacements)
   const key = fromHex(secretHex)
   const issued = new Map()
   let added = false
@@ -66,22 +88,10 @@ export function createMasker(config, secretHex, reverse) {
     return id
   }
 
-  // Applies fn to the parts of text between issued placeholders, leaving the placeholders as they are.
-  function outsidePlaceholders(text, fn) {
-    if (placeholderToken === null) return fn(text)
-    let out = ''
-    let last = 0
-    for (const token of text.matchAll(placeholderToken)) {
-      out += fn(text.slice(last, token.index)) + token[0]
-      last = token.index + token[0].length
-    }
-    return out + fn(text.slice(last))
-  }
-
   function mask(text) {
-    let out = termOriginals === null ? text : outsidePlaceholders(text, (part) => part.replace(termOriginals, (original) => terms[original]))
+    let out = termOriginals === null ? text : outside(text, termProtected, (part) => part.replace(termOriginals, (original) => terms[original]))
     for (const rule of rules) {
-      out = outsidePlaceholders(out, (part) => part.replace(rule.pattern, (match) => (match === '' ? match : placeholder(rule.name, match))))
+      out = outside(out, placeholderToken, (part) => part.replace(rule.pattern, (match) => (match === '' ? match : placeholder(rule.name, match))))
     }
     return out
   }
@@ -112,4 +122,11 @@ export function mapBlockText(block, fn) {
   if (typeof block.content === 'string') return { ...block, content: fn(block.content) }
   if (!Array.isArray(block.content)) return block
   return { ...block, content: block.content.map((item) => (item.type === 'text' ? { ...item, text: fn(item.text) } : item)) }
+}
+
+// Applies fn to the text of a stored conversation row that a request carries; rows without a role
+// (notices) are returned as they are.
+export function mapMessageText(message, fn) {
+  if (message.role === undefined) return message
+  return { ...message, content: message.content.map((block) => mapBlockText(block, fn)) }
 }

@@ -108,5 +108,5 @@ test('/privacy-mask reports the active state', async ($, on) => {
 test('/privacy-mask reports a blocked config', async ($, on) => {
   setupWorld(on, { [PROJECT_PATH]: '{"terms":{"a":"X","b":"X"}}' })
   const result = await $.command.run({ command: 'privacy-mask', args: '' })
-  expect(result.text).toBe('mode: blocked\nconfig files: project\nerror: terms "a" and "b" share the replacement "X"')
+  expect(result.text).toBe('mode: blocked\nconfig files: project\nerror: two terms share the replacement "X"')
 })

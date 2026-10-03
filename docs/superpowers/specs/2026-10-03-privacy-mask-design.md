@@ -104,8 +104,14 @@ Validation errors (config enters blocked mode):
 - Regex rule without `name` matching `^[A-Z][A-Z0-9_]*$`, or without `pattern`.
 - Pattern or flags that do not compile. The `g` flag is always added by the masker.
 - Two terms mapping to the same replacement (would make unmask ambiguous).
-- A replacement that contains any term original as a substring (would make masking
-  non-idempotent, see below).
+- A replacement that contains any term original as a substring, or a term original that
+  contains any replacement: the term pass leaves replacements untouched (see below), so
+  either overlap would let an original escape masking.
+
+Error messages reach toasts, `/privacy-mask` and drop notices, so they never quote a term
+original or the file text an engine error would echo: terms are named by position in their
+file or by their replacement, and JSON and regex syntax errors are reported without the
+engine's message.
 
 ## Mask engine (`masker.js`)
 
@@ -119,7 +125,9 @@ small value space (IPv4 has 2^32 values) could be brute-forced back to the origi
 `mask(text)`:
 
 1. Terms: one alternation regex of all term originals, escaped, sorted longest first,
-   case-sensitive; replace each match with its replacement in a single pass.
+   case-sensitive; replace each match with its replacement in a single pass. Issued
+   placeholders and existing replacement values are left out of this pass, so an original
+   cannot match across a replacement and its neighbouring text on a second pass.
 2. Regex rules, in config order: replace each match with its HMAC placeholder and add
    `placeholder -> match` to the reverse table. If the reverse table already maps that
    placeholder to a different original (HMAC collision), throw so the hook fails closed.
@@ -221,6 +229,12 @@ Rules the implementation must keep:
 Render rewrites change only the drawing; stored messages stay masked. Read-only props
 (`onScreen`, ids, flags) are passed through untouched.
 
+Known display limitation: a tool call that errored is answered with a masked `{ deny }`
+(a hook cannot return `isError`, and returning core's own object would send its unmasked
+messages), so the transcript draws it as a refusal. `ToolUse.output` (the text the model
+read) is unmasked, but the error text a `ToolResult` row draws is not one of its props and
+may show placeholders.
+
 ### Verification: `tool.call` result `ref`
 
 The types state that returning core's object makes core use its own (unmasked) messages
@@ -247,7 +261,9 @@ result the model read is masked. If it is not, stop and report instead of shippi
 
 ## Command
 
-`/privacy-mask` (runs without a Claude turn) prints: loaded config files, term count,
+`/privacy-mask` (runs without a Claude turn) prints: loaded config files by label (`global`,
+`project`; not their paths, since the home path usually holds the user name and command
+output can be carried into the next request), term count,
 regex rule count, reverse table size for the project, current mode (active / pass-through /
 blocked) and any config errors.
 

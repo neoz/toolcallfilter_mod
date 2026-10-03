@@ -5,22 +5,24 @@ function isPlainObject(value) {
 }
 
 // Parses one config file's text into { terms, regex }; throws an Error naming `label` on any problem.
+// Messages reach toasts, /privacy-mask and drop notices, so they never quote a term original or
+// the file text an engine error message would echo; terms are named by position or replacement.
 export function parseConfig(text, label) {
   let raw
   try {
     raw = JSON.parse(text)
-  } catch (err) {
-    throw new Error(`${label}: invalid JSON: ${err.message}`)
+  } catch {
+    throw new Error(`${label}: invalid JSON`)
   }
   if (!isPlainObject(raw)) throw new Error(`${label}: the config must be a JSON object`)
 
   const terms = raw.terms ?? {}
   if (!isPlainObject(terms)) throw new Error(`${label}: "terms" must be an object`)
-  for (const [original, replacement] of Object.entries(terms)) {
+  Object.entries(terms).forEach(([original, replacement], index) => {
     if (original === '' || typeof replacement !== 'string' || replacement === '') {
-      throw new Error(`${label}: term "${original}" must map a non-empty string to a non-empty string`)
+      throw new Error(`${label}: term #${index + 1} must map a non-empty string to a non-empty string`)
     }
-  }
+  })
 
   const rules = raw.regex ?? []
   if (!Array.isArray(rules)) throw new Error(`${label}: "regex" must be an array`)
@@ -38,8 +40,8 @@ export function parseConfig(text, label) {
     if (typeof flags !== 'string') throw new Error(`${label}: regex rule "${rule.name}" has non-string "flags"`)
     try {
       new RegExp(rule.pattern, flags.includes('g') ? flags : flags + 'g')
-    } catch (err) {
-      throw new Error(`${label}: regex rule "${rule.name}": ${err.message}`)
+    } catch {
+      throw new Error(`${label}: regex rule "${rule.name}" has an invalid pattern or flags`)
     }
     return { name: rule.name, pattern: rule.pattern, flags }
   })
@@ -64,17 +66,25 @@ export function mergeConfigs(globalConfig, projectConfig) {
   }
 }
 
-// Rejects merged terms that would make unmasking ambiguous or masking non-idempotent.
+// Rejects merged terms that would make unmasking ambiguous or let an original escape masking: the
+// term pass leaves replacements untouched, so an original overlapping a replacement would stay raw.
 export function validateConfig(config) {
   const entries = Object.entries(config.terms)
-  const byReplacement = new Map()
-  for (const [original, replacement] of entries) {
-    const other = byReplacement.get(replacement)
-    if (other !== undefined) throw new Error(`terms "${other}" and "${original}" share the replacement "${replacement}"`)
-    byReplacement.set(replacement, original)
+  const replacements = new Set()
+  for (const [, replacement] of entries) {
+    if (replacements.has(replacement)) throw new Error(`two terms share the replacement "${replacement}"`)
+    replacements.add(replacement)
   }
   for (const [, replacement] of entries) {
     const inside = entries.find(([original]) => replacement.includes(original))
-    if (inside !== undefined) throw new Error(`replacement "${replacement}" contains the term "${inside[0]}"`)
+    if (inside !== undefined) {
+      throw new Error(`replacement "${replacement}" contains the original of the term replaced by "${inside[1]}"`)
+    }
+  }
+  for (const [original, replacement] of entries) {
+    const inside = entries.find(([, other]) => original.includes(other))
+    if (inside !== undefined) {
+      throw new Error(`the original of the term replaced by "${replacement}" contains the replacement "${inside[1]}"`)
+    }
   }
 }
