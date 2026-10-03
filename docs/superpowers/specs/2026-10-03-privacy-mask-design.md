@@ -184,7 +184,7 @@ Rules the implementation must keep:
 | Event | Behavior |
 |---|---|
 | `prompt.submit` | `next({ ...e, text: mask(e.text), context: e.context?.map(mask) })` |
-| `tool.call` (after `next`) | Answered: return a fresh `{ result: deepMask(result), context: context?.map(mask) }` without `ref` and `text`. Errored (`isError`): return `{ deny: mask(text) }`. Denied: return `{ deny: mask(deny) }`. |
+| `tool.call` (after `next`) | Answered: return a fresh `{ result: deepMask(result), context }` without `ref` and `text`; `context` is kept as received because the engine refuses a hook that rewrites entries a hook below attached, and those entries reach the model as attachments that `prompt.attachment` and `session.append` mask. Errored (`isError`): return `{ deny: mask(text) }`. Denied: return `{ deny: mask(deny) }`. |
 | `prompt.section` | `await next(e)`, return `{ text: mask(text) }` (null stays null) |
 | `prompt.context` | mask every block; return `{ blocks }` only, without `instructionFiles`, so the engine does not re-render `claudeMd` from the unmasked files |
 | `prompt.attachment` | mask `text` |

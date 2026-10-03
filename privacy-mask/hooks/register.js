@@ -5,6 +5,7 @@ import { createMasker } from './masker.js'
 const SECRET_KEY = 'privacy-mask:secret'
 const REVERSE_PREFIX = 'privacy-mask:reverse:'
 const CONFIG_FILE = '/.claude/privacy-mask.json'
+const RESERVED_TOOL_KEYS = new Set(['tool', 'tool_use_id', 'agentId', 'consent'])
 
 // Loaded once per module load; /reload-plugins re-runs the module and loads again.
 let statePromise
@@ -67,6 +68,11 @@ async function persist($, s) {
   await $.store.set(s.reverseKey, s.reverse)
 }
 
+// The tool's own arguments of a tool.call event, without the engine's reserved keys.
+function toolArguments(e) {
+  return Object.fromEntries(Object.entries(e).filter(([key]) => !RESERVED_TOOL_KEYS.has(key)))
+}
+
 export function register(on) {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'privacy-mask', description: 'Show privacy-mask status', immediate: true })
@@ -98,4 +104,25 @@ export function register(on) {
     await persist($, s)
     return next(masked)
   }).catch(async ($, e, next) => ({ drop: 'privacy-mask: prompt not sent: ' + next.error.message }))
+
+  on('tool.call', async ($, e, next) => {
+    const s = await activeState($)
+    if (s === null) return next(e)
+    const result = await next({ ...e, ...s.masker.deepUnmask(toolArguments(e)) })
+    let masked
+    if (result.deny !== undefined) {
+      masked = { deny: s.masker.mask(result.deny) }
+    } else if (result.isError) {
+      masked = { deny: s.masker.mask(result.text ?? 'The tool failed.') }
+    } else {
+      // A fresh object without core's ref and text: returning core's own object would make core
+      // send its unmasked messages verbatim.
+      // Context entries from below must be kept as they are; they reach the model as attachments,
+      // which the prompt.attachment and session.append hooks mask.
+      masked = { result: s.masker.deepMask(result.result) }
+      if (result.context !== undefined) masked.context = result.context
+    }
+    await persist($, s)
+    return masked
+  }).catch(async () => ({ deny: 'privacy-mask: the tool result was withheld because masking failed.' }))
 }
