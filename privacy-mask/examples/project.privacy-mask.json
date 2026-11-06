@@ -1,0 +1,9 @@
+{
+  "terms": {
+    "Acme Corp": "Contoso",
+    "Project Falcon": "Project Alpha"
+  },
+  "regex": [
+    { "name": "HOST", "pattern": "[a-z0-9-]+\\.corp\\.acme\\.com", "flags": "i" }
+  ]
+}

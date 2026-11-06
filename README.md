@@ -81,6 +81,9 @@ The mod reads two optional files and merges them:
 On Windows, `~` is `%USERPROFILE%`. With no file at all, the mod does nothing and says so
 once at startup.
 
+Example files to copy and edit: [global](privacy-mask/examples/global.privacy-mask.json),
+[project](privacy-mask/examples/project.privacy-mask.json).
+
 ```json
 {
   "terms": {

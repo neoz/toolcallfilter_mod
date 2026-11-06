@@ -1,0 +1,13 @@
+{
+  "terms": {
+    "John Doe": "Jane Roe",
+    "jdoe": "user1",
+    "acme-internal.net": "example.internal"
+  },
+  "regex": [
+    { "name": "EMAIL", "pattern": "[\\w.+-]+@[\\w-]+(\\.[\\w-]+)+" },
+    { "name": "IP", "pattern": "\\b\\d{1,3}(\\.\\d{1,3}){3}\\b" },
+    { "name": "AWS_KEY", "pattern": "\\bAKIA[0-9A-Z]{16}\\b" },
+    { "name": "JWT", "pattern": "\\beyJ[\\w-]+\\.[\\w-]+\\.[\\w-]+\\b" }
+  ]
+}
