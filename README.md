@@ -84,6 +84,11 @@ once at startup.
 Example files to copy and edit: [global](privacy-mask/examples/global.privacy-mask.json),
 [project](privacy-mask/examples/project.privacy-mask.json).
 
+To have Claude make the change, ask it or run `/privacy-mask:edit-config`. The skill edits one
+entry at a time through a script that validates the result before writing, because Claude sees
+the file masked and rewriting it whole would corrupt the terms. It needs `node`, and it cannot
+run while the config is rejected.
+
 ```json
 {
   "terms": {
