@@ -1,6 +1,6 @@
 {
   "name": "privacy-mask",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Masks configured terms and regex matches in everything the model reads and restores them in what you see and what tools run",
   "author": { "name": "neoz" },
   "homepage": "https://github.com/neoz/toolcallfilter_mod",
